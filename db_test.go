@@ -15,7 +15,6 @@
 package nutsdb
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -181,21 +180,7 @@ func TestDB_DeleteANonExistKey(t *testing.T) {
 		testBucket := "test_bucket"
 		txDel(t, db, testBucket, GetTestBytes(0), ErrNotFoundBucket)
 		txPut(t, db, testBucket, GetTestBytes(1), GetRandomBytes(24), Persistent, nil)
-		txDel(t, db, testBucket, GetTestBytes(0), ErrNotFoundKey)
-	})
-}
-
-func TestDB_BPTSparse(t *testing.T) {
-	opts := DefaultOptions
-	opts.EntryIdxMode = HintBPTSparseIdxMode
-	runNutsDBTest(t, &opts, func(t *testing.T, db *DB) {
-		bucket1, bucket2 := "AA", "AAB"
-		key1, key2 := []byte("BB"), []byte("B")
-		val1, val2 := []byte("key1"), []byte("key2")
-		txPut(t, db, bucket1, key1, val1, Persistent, nil)
-		txPut(t, db, bucket2, key2, val2, Persistent, nil)
-		txGet(t, db, bucket1, key1, val1, nil)
-		txGet(t, db, bucket2, key2, val2, nil)
+		txDel(t, db, testBucket, GetTestBytes(0), ErrKeyNotFound)
 	})
 }
 
@@ -208,10 +193,167 @@ func txSAdd(t *testing.T, db *DB, bucket string, key, value []byte, expectErr er
 	require.NoError(t, err)
 }
 
+func txSKeys(t *testing.T, db *DB, bucket, pattern string, f func(key string) bool, expectVal int, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		num := 0
+		err := tx.SKeys(bucket, pattern, func(key string) bool {
+			num += 1
+			return f(key)
+		})
+		if expectErr != nil {
+			assert.ErrorIs(t, expectErr, err)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, expectVal, num)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func txSIsMember(t *testing.T, db *DB, bucket string, key, value []byte, expect bool) {
 	err := db.View(func(tx *Tx) error {
 		ok, _ := tx.SIsMember(bucket, key, value)
 		require.Equal(t, expect, ok)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSAreMembers(t *testing.T, db *DB, bucket string, key []byte, expect bool, value ...[]byte) {
+	err := db.View(func(tx *Tx) error {
+		ok, _ := tx.SAreMembers(bucket, key, value...)
+		require.Equal(t, expect, ok)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSHasKey(t *testing.T, db *DB, bucket string, key []byte, expect bool) {
+	err := db.View(func(tx *Tx) error {
+		ok, _ := tx.SHasKey(bucket, key)
+		require.Equal(t, expect, ok)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSMembers(t *testing.T, db *DB, bucket string, key []byte, expectLength int, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		members, err := tx.SMembers(bucket, key)
+		if expectErr != nil {
+			assert.ErrorIs(t, expectErr, err)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, expectLength, len(members))
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSCard(t *testing.T, db *DB, bucket string, key []byte, expectLength int, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		length, err := tx.SCard(bucket, key)
+		if expectErr != nil {
+			assert.ErrorIs(t, expectErr, err)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, expectLength, length)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSDiffByOneBucket(t *testing.T, db *DB, bucket string, key1, key2 []byte, expectVal [][]byte, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		diff, err := tx.SDiffByOneBucket(bucket, key1, key2)
+		if expectErr != nil {
+			assert.ErrorIs(t, expectErr, err)
+		} else {
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, expectVal, diff)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSDiffByTwoBucket(t *testing.T, db *DB, bucket1 string, key1 []byte, bucket2 string, key2 []byte, expectVal [][]byte, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		diff, err := tx.SDiffByTwoBuckets(bucket1, key1, bucket2, key2)
+		if expectErr != nil {
+			assert.ErrorIs(t, err, expectErr)
+		} else {
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, expectVal, diff)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSPop(t *testing.T, db *DB, bucket string, key []byte, expectErr error) {
+	err := db.Update(func(tx *Tx) error {
+		_, err := tx.SPop(bucket, key)
+		assertErr(t, err, expectErr)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSMoveByOneBucket(t *testing.T, db *DB, bucket1 string, key1, key2, val []byte, expectVal bool, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		ok, err := tx.SMoveByOneBucket(bucket1, key1, key2, val)
+		if expectErr != nil {
+			assert.ErrorIs(t, err, expectErr)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, expectVal, ok)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSMoveByTwoBuckets(t *testing.T, db *DB, bucket1 string, key1 []byte, bucket2 string, key2 []byte, val []byte, expectVal bool, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		ok, err := tx.SMoveByTwoBuckets(bucket1, key1, bucket2, key2, val)
+		if expectErr != nil {
+			assert.ErrorIs(t, err, expectErr)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, expectVal, ok)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSUnionByOneBucket(t *testing.T, db *DB, bucket1 string, key1, key2 []byte, expectVal [][]byte, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		union, err := tx.SUnionByOneBucket(bucket1, key1, key2)
+		if expectErr != nil {
+			assert.ErrorIs(t, err, expectErr)
+		} else {
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, expectVal, union)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func txSUnionByTwoBuckets(t *testing.T, db *DB, bucket1 string, key1 []byte, bucket2 string, key2 []byte, expectVal [][]byte, expectErr error) {
+	err := db.View(func(tx *Tx) error {
+		union, err := tx.SUnionByTwoBuckets(bucket1, key1, bucket2, key2)
+		if expectErr != nil {
+			assert.ErrorIs(t, err, expectErr)
+		} else {
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, expectVal, union)
+		}
 		return nil
 	})
 	require.NoError(t, err)
@@ -248,7 +390,7 @@ func txZCard(t *testing.T, db *DB, bucket string, key []byte, expectLength int, 
 	err := db.View(func(tx *Tx) error {
 		length, err := tx.ZCard(bucket, key)
 		if expectErr != nil {
-			assert.NoError(t, err)
+			assert.Equal(t, expectErr, err)
 		} else {
 			assert.Equal(t, expectLength, length)
 		}
@@ -363,6 +505,29 @@ func txRange(t *testing.T, db *DB, bucket string, key []byte, start, end, expect
 	require.NoError(t, err)
 }
 
+func txIterateBuckets(t *testing.T, db *DB, ds uint16, pattern string, f func(key string) bool, expectErr error, containsKey ...string) {
+	err := db.View(func(tx *Tx) error {
+		var elements []string
+		err := tx.IterateBuckets(ds, pattern, func(key string) bool {
+			if f != nil && !f(key) {
+				return false
+			}
+			elements = append(elements, key)
+			return true
+		})
+		if err != nil {
+			assert.Equal(t, expectErr, err)
+		} else {
+			assert.NoError(t, err)
+			for _, key := range containsKey {
+				assert.Contains(t, elements, key)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestDB_GetKeyNotFound(t *testing.T) {
 	runNutsDBTest(t, nil, func(t *testing.T, db *DB) {
 		bucket := "bucket"
@@ -393,26 +558,6 @@ func TestDB_Close(t *testing.T) {
 		require.NoError(t, db.Close())
 		require.Equal(t, ErrDBClosed, db.Close())
 	})
-}
-
-func TestDB_ErrWhenBuildListIdx(t *testing.T) {
-	ts := []struct {
-		err     error
-		want    error
-		notwant error
-	}{
-		{
-			errors.New("some err"),
-			errors.New("when build listIdx err: some err"),
-			fmt.Errorf("unexpected error"),
-		},
-	}
-
-	for _, tc := range ts {
-		got := ErrWhenBuildListIdx(tc.err)
-		assert.Equal(t, got, tc.want)
-		assert.NotEqual(t, got, tc.notwant)
-	}
 }
 
 func TestDB_ErrThenReadWrite(t *testing.T) {
@@ -517,14 +662,14 @@ func TestDB_DeleteBucket(t *testing.T) {
 		key := GetTestBytes(0)
 		val := GetTestBytes(0)
 
-		txDeleteBucket(t, db, DataStructureTree, bucket, ErrBucketNotFound)
+		txDeleteBucket(t, db, DataStructureBTree, bucket, ErrBucketNotFound)
 
 		txPut(t, db, bucket, key, val, Persistent, nil)
 		txGet(t, db, bucket, key, val, nil)
 
-		txDeleteBucket(t, db, DataStructureTree, bucket, nil)
+		txDeleteBucket(t, db, DataStructureBTree, bucket, nil)
 		txGet(t, db, bucket, key, nil, ErrBucketNotFound)
-		txDeleteBucket(t, db, DataStructureTree, bucket, ErrBucketNotFound)
+		txDeleteBucket(t, db, DataStructureBTree, bucket, ErrBucketNotFound)
 	})
 }
 
@@ -555,15 +700,6 @@ func withRAMIdxDB(t *testing.T, fn func(t *testing.T, db *DB)) {
 	opt := DefaultOptions
 	opt.Dir = tmpdir
 	opt.EntryIdxMode = HintKeyAndRAMIdxMode
-
-	withDBOption(t, opt, fn)
-}
-
-func withBPTSparseIdxDB(t *testing.T, fn func(t *testing.T, db *DB)) {
-	tmpdir, _ := os.MkdirTemp("", "nutsdb")
-	opt := DefaultOptions
-	opt.Dir = tmpdir
-	opt.EntryIdxMode = HintBPTSparseIdxMode
 
 	withDBOption(t, opt, fn)
 }
@@ -600,25 +736,6 @@ func TestDB_HintKeyAndRAMIdxMode_RestartDB(t *testing.T) {
 		db.Close()
 
 		// restart db with HintKeyAndRAMIdxMode EntryIdxMode
-		db, err := Open(db.opt)
-		require.NoError(t, err)
-		txGet(t, db, bucket, key, val, nil)
-	})
-}
-
-func TestDB_HintBPTSparseIdxMode_RestartDB(t *testing.T) {
-	opts := DefaultOptions
-	opts.EntryIdxMode = HintBPTSparseIdxMode
-	runNutsDBTest(t, &opts, func(t *testing.T, db *DB) {
-		bucket := "bucket"
-		key := GetTestBytes(0)
-		val := GetTestBytes(0)
-
-		txPut(t, db, bucket, key, val, Persistent, nil)
-		txGet(t, db, bucket, key, val, nil)
-		db.Close()
-
-		// restart db with HintBPTSparseIdxMode EntryIdxMode
 		db, err := Open(db.opt)
 		require.NoError(t, err)
 		txGet(t, db, bucket, key, val, nil)
@@ -724,4 +841,27 @@ func TestDB_ChangeMode_RestartDB(t *testing.T) {
 	changeModeRestart(HintKeyValAndRAMIdxMode, HintKeyAndRAMIdxMode)
 	// HintKeyAndRAMIdxMode to HintKeyValAndRAMIdxMode
 	changeModeRestart(HintKeyAndRAMIdxMode, HintKeyValAndRAMIdxMode)
+}
+
+func TestTx_SmallFile(t *testing.T) {
+	opts := DefaultOptions
+	opts.SegmentSize = 100
+	opts.EntryIdxMode = HintKeyAndRAMIdxMode
+	runNutsDBTest(t, &opts, func(t *testing.T, db *DB) {
+		bucket := "bucket"
+		err := db.Update(func(tx *Tx) error {
+			for i := 0; i < 100; i++ {
+				err := tx.Put(bucket, GetTestBytes(i), GetTestBytes(i), Persistent)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		require.Nil(t, err)
+		require.NoError(t, db.Close())
+		db, _ = Open(opts)
+
+		txGet(t, db, bucket, GetTestBytes(10), GetTestBytes(10), nil)
+	})
 }
